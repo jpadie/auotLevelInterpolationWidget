@@ -111,18 +111,17 @@ var interPolator = (function(){
 							end[e] = that.curPos[e];
 						}
 					}, this);
-					
-					if(!hasCoords){
-						this.output.push(elem);
-					} else {
-						var hasOffset = false;
-						['i','j','k'].forEach(function(e,index, that){
+					var hasOffset = false;
+					['i','j','k'].forEach(function(e,index, that){
 							if(offset[e].test(elem)){
 								var result = offset[e].exec(elem);
 								offset[e] = that.makeNumeric(result[1]);
 								hasOffset = true;
 							} 
-						}, this);
+					}, this);
+					if(!hasCoords && !hasOffset){
+						this.output.push(elem);
+					} else {
 						
 						if(!hasOffset){
 							if(radius.test(elem)){
@@ -131,10 +130,22 @@ var interPolator = (function(){
 								this.output.push(elem); //don't know what to do so give up
 							}
 						} else {
-							var rValue = this.interpolateArc(curPos, end, offset, clockwise);
-							rValue.forEach(function(elem, that){
-								that.output.push(elem);
-							}, this);
+							if(hasCoords){
+								var rValue = this.interpolateArc(curPos, end, offset, clockwise);
+								rValue.forEach(function(elem, that){
+									that.output.push(elem);
+								}, this);
+							} else {
+								//is a circle
+								var rValue = this.interpolateCircle(curPos, offset, clockwise);
+								if(!rValue){
+									this.output.push(elem);
+								} else {
+									rValue.forEach(function(elem, that){
+										that.output.push(elem);
+									}, this);
+								}
+							}
 							
 						}
 					}
@@ -171,7 +182,54 @@ var interPolator = (function(){
 			return false;
 		}
 	};
-	
+	var interpolateCircle: function (start,offset,clockwise=true){
+		var returnArray = [];
+		var origin = {	x:	start.x + offset.i,
+						y:	start.y + offset.j,
+						z:	start.z + offset.k };
+		
+		var radius = Math.sqrt( (offset.i * offset.i) + (offset.j * offset.j) );
+		if(origin.z != 0){
+			return false;
+		}
+		var circumference = Math.PI * 2 * radius;
+		if(circumference > maxDistance){
+			//hmmm
+			/* 
+			 easiest is to calculate the angle of the starting point from due north.
+			 then create a hemi-circle and interpolate
+			*/
+			
+			var topPosition = {x: origin.x, y: origin.y + radius};
+			var bottomPosition = 
+			var topChordLength = Math.sqrt(Math.pow(topPosition.x - start.x,2) + Math.pow(topPosition.y - start.y,2));
+			var topAngle = 2 * Math.asin(topChordLength/(2 * radius));
+			if(clockwise){
+				var oppositeAngle = topAngle + Math.PI; //find inverse angle
+			} else {
+				var oppositeAngle = topAngle - Math.PI;
+			}
+			var x = origin.x + radius * Math.sin(oppositeAngle);	
+			var y = origin.y + radius * Math.cos(oppositeAngle);
+			var temp;
+			temp = interpolateArc(start, {x:x,y:y,z:start.z}, offset, clockwise);
+			if(temp){
+				returnArray = returnArray.concat(temp);
+			}
+			offset[i] = -1 * offset[i];
+			offset[j] = -1 * offset[j];
+			
+			temp = interpolateArc({x:x,y:y,z:start.z}, start, offset, clockwise);
+			if(temp){
+				returnArray = returnArray.concat(temp);
+			}
+			return returnArray;
+		} else {
+			return false;
+		}
+			
+	};
+
 	var	interpolateArc: function(start, end, offset, clockwise = true){
 		['x','y','z'].forEach(function(elem, index, that){
 			if(typeof end[elem] === "undefined"){
@@ -188,15 +246,18 @@ var interPolator = (function(){
 						z:	start.z + offset.k };
 		
 		var radius = Math.sqrt( (offset.i * offset.i) + (offset.j * offset.j) );
-		if(origin.z != 0) return end;
+		if(origin.z != 0){
+			returnArray.push(start);
+			return returnArray;
+		}
 		var circumference = Math.PI * 2 * radius;
-		console.log("circumference", circumference);
+		//console.log("circumference", circumference);
 		var chordLength = Math.sqrt(Math.pow(end.x-start.x,2) + Math.pow(end.y - start.y,2));
-		console.log("chord length", chordLength);
+		//console.log("chord length", chordLength);
 		var segmentAngle = 2 * (Math.asin(chordLength/(2 * radius)));
-		console.log("segment angle", segmentAngle);
+		//console.log("segment angle", segmentAngle);
 		var arcLength = circumference * segmentAngle/(2 * Math.PI);
-		console.log("Arc Length", arcLength);
+		//console.log("Arc Length", arcLength);
 		if(arcLength > maxDistance){
 			var intermediateSteps = Math.floor(arcLength/maxDistance);
 			//we need the angle from the vertical
