@@ -1,56 +1,71 @@
-var interPolator = (function(){
-	var input;
-	var output;
-	var maxDistance;
+var interPolator = (function (){
+	var input=[];
+	var output=[];
+	var maxDistance=5;
+	var lineCounter = 0;
+	var mapping = [];
+	var addMapping = function(codeNum, elem){
+		console.log("adding mapping", codeNum, elem);
+		if(typeof mapping[codeNum] == "undefined"){
+			mapping[codeNum] = [elem];
+		} else {
+			mapping[codeNum].push(elem);
+		}
+	};
 	
-	var parseGcode = function (){
+	var parseGcode=function (){
 		var curPos = {x:0, y:0, z:0};
 		var lastCommand = '';
-		var feedrate = 0;
-		var newGCode = [];
+		var feedRate = 0;
 		var command = new RegExp("(G\\s*(0|1|2|3)+)",'i');
-		var coord = {	x:	new RegExp("X\\s*(\\d+)",'i'),
-						y:  new RegExp("Y\\s*(\\d+)",'i'),
-						z:	new RegExp("Z\\s*(\\d+)",'i')
+		var coord = {	x:	new RegExp("X\\s*(-?\\d+)",'i'),
+						y:  new RegExp("Y\\s*(-?\\d+)",'i'),
+						z:	new RegExp("Z\\s*(-?\\d+)",'i')
 		};
-		var offset = {	i: new RegExp("I\\s*(\\d+)",'i'),
-						j: new RegExp("J\\s*(\\d+)",'i'),
-						k: new RegExp("K\\s*(\\d+)",'i')
+		var offset = {	i: new RegExp("I\\s*(-?\\d+)",'i'),
+						j: new RegExp("J\\s*(-?\\d+)",'i'),
+						k: new RegExp("K\\s*(-?\\d+)",'i')
 		};
 		var feedrate = new RegExp("F\\s*(\\d+)",'i');
 		var radius = new RegExp("R\\s*(\\d+)",'i');
 		var comment = new RegExp("(\\(.*?\\))");
 		var lineNumber = new RegExp("N\\s*\\d*","i");
 		var end = {};
-		this.input.forEach(function(elem){
+		var oCodeNum = -1;
+		var originalElement = '';
+		
+		input.forEach(function(elem){
+			mapping = [];
+			oCodeNum++;
 			var result;
-			var comments;
-			elem = elem.replace(ignore, '');
+			var comments = [];
 			elem = elem.trim();
 			elem = elem.replace(lineNumber,'');
+			originalElement = elem;
 			var hasFeedrate = false;
 			var hasCommand = false;
 			var hasComment = false;
 			if(comment.test(elem)){
+				hasComment = true;
 				var counter = 1;
 				var _comments = comment.exec(elem);
-				do{
+				while(_comments && counter < 10){
 					comments.push(_comments[1]);
-					elem.replace(comment, '^'+ counter);
+					elem=elem.replace(_comments[1], '^'+ counter);
 					counter++;
 					_comments = comment.exec(elem);
-				} while (_comments);
+				};
 			}
 			if(command.test(elem)){
 				result = command.exec(elem);
 				//get rid of intermediate spaces
-				result = result.replace(' ', '');
+				result[1] = result[1].replace(' ', '');
 				lastCommand = result[1].toUpperCase();
 				hasCommand=true;
 			}
 			if(feedrate.test(elem)){
 				result = feedrate.exec(elem);
-				feedrate = makeNumeric(elem[1]);
+				feedRate = makeNumeric(elem[1]);
 				hasFeedrate = true;
 			}
 			var hasCoords = false;
@@ -60,34 +75,45 @@ var interPolator = (function(){
 				case 'G00':
 				case 'G1':
 				case 'G01':
-					['x','y','z'].forEach(function(e,index, that){
+					['x','y','z'].forEach(function (e,index, that){
 						if(coord[e].test(elem)){
 							var result = coord[e].exec(elem);
-							end[e] = that.makeNumeric(result[1]);
+							end[e] = makeNumeric(result[1]);
 							hasCoords = true;
 						} else {
-							end[e] = that.curPos[e];
+							end[e] = curPos[e];
 						}
 					}, this);
 					if(hasCoords){
-						var rValue = this.interpolateLine(curPos, end, feedrate);
+						var rValue = interpolateLine(curPos, end, feedrate);
 						if(rValue === false){
-							this.output.push(elem);
+							output.push("N" + lineCounter + " " + elem);
+							addMapping(oCodeNum, elem);
+							lineCounter++;
 						} else{
 							for(var i = 0; i <rValue.length; i++){
-								if(hasCommand && i == 0){
-									var item = lastCommand + " " + rValue[i];
-								} else {
-									var item = rValue[i];
-								}
+								var item = rValue[i];
+								if(hasCommand){
+									item = lastCommand + " " + item;
+								} 
 								if(hasFeedrate){
 									item = item + " F" + feedrate;
 								}
-								this.output.push(item);
+								if(hasComment && index == 0){
+									comments.forEach(function(c,i){
+										item=item.replace('^'+ (i+1), c);
+									});
+									comments = [];
+								}
+								output.push("N" + lineCounter + " " + item);
+								addMapping(oCodeNum, item);
+								lineCounter++;
 							}
 						}
 					} else{
-						this.output.push(elem);
+						output.push("N" + lineCounter + " " + originalElement);
+						addMapping(oCodeNum, originalElement);
+						lineCounter++;
 					}
 					curPos = end;
 					end = {};
@@ -98,78 +124,130 @@ var interPolator = (function(){
 					var clockwise = true;
 				case 'G3':
 				case 'G03':
-					['x','y','z'].forEach(function(e,index, that){
+					['x','y','z'].forEach(function (e,index, that){
 						if(coord[e].test(elem)){
 							var result = coord[e].exec(elem);
-							end[e] = that.makeNumeric(result[1]);
+							end[e] = makeNumeric(result[1]);
 							hasCoords = true;
 						} else {
-							end[e] = that.curPos[e];
+							end[e] = curPos[e];
 						}
 					}, this);
 					var hasOffset = false;
+					var offsets = [];
 					['i','j','k'].forEach(function(e,index, that){
 							if(offset[e].test(elem)){
 								var result = offset[e].exec(elem);
-								offset[e] = that.makeNumeric(result[1]);
+								offsets[e] = makeNumeric(result[1]);
 								hasOffset = true;
-							} 
+							} else {
+								offsets[e] = 0;
+							}
 					}, this);
 					if(!hasCoords && !hasOffset){
-						this.output.push(elem);
+						output.push("N" + lineCounter + " " + originalElement);
+						addMapping(oCodeNum, originalElement);
+						lineCounter++;
 					} else {
-						
+						var hasRadius = false;
 						if(!hasOffset){
 							if(radius.test(elem)){
 								var rr = radius.exec(elem);
+								var Radius = makeNumeric(rr[1]);
+								hasRadius = true;
+								//interpolate arc with radius
 							} else {
-								this.output.push(elem); //don't know what to do so give up
+								output.push("N" + lineCounter + " " + originalElement); //don't know what to do so give up
+								addMapping(oCodeNum, originalElement);
+								lineCounter++;
 							}
 						} else {
 							if(hasCoords){
-								var rValue = this.interpolateArc(curPos, end, offset, clockwise);
-								rValue.forEach(function(elem, that){
-									that.output.push(elem);
-								}, this);
-							} else {
-								//is a circle
-								var rValue = this.interpolateCircle(curPos, offset, clockwise);
-								if(!rValue){
-									this.output.push(elem);
+								var rValue = interpolateArc(curPos, end, offsets, clockwise);
+								if(rValue === false){
+									output.push("N" + lineCounter + " " + originalElement);
+									addMapping(oCodeNum, originalElement );
+									lineCounter++;
 								} else {
-									rValue.forEach(function(elem, that){
-										that.output.push(elem);
+									rValue.forEach(function (e, index, that){
+										if(hasFeedrate && index == 0){
+											e = e + " F" + feedRate;
+										}
+										
+										if(hasComment && index == 0){
+											comments.forEach(function(c,i){
+												e=e.replace('^'+ (i+1), c);
+											});
+											comments = [];
+										}
+										output.push("N" + lineCounter + " " + e);
+										addMapping(oCodeNum, e );
+										lineCounter++;
 									}, this);
 								}
+							} else {
+								//is a circle
+								console.log('is a circle');
+								end=curPos; //need this for later
+								var rValue = interpolateCircle(curPos, offsets, clockwise);
+								if(rValue === false){
+									output.push("N" + lineCounter + " " + originalElement);
+									addMapping(oCodeNum, originalElement );
+									lineCounter++;
+								} else {
+									rValue.forEach(function(e, index, that){
+										if(hasFeedrate && index == 0){
+											e = e + " F" + feedRate;
+										}
+										
+										if(hasComment && index == 0){
+											comments.forEach(function(c,i){
+												e=e.replace('^'+ (i+1), c);
+											});
+											comments = [];
+										}
+										output.push("N" + lineCounter + " " + e);
+										addMapping(oCodeNum, e );
+										lineCounter++;
+									}, this);
+								}
+								
 							}
-							
 						}
 					}
+					curPos = end;
+					end = {};
 				break;
+				default:
+					output.push("N" + lineCounter + " " + originalElement);
+					addMapping(oCodeNum, originalElement );
+					lineCounter++;
 			}
-				
 		});
+		console.log(mapping);
+		return output;
 	};
 	
-	var interpolateLine: function(start, end){
+	var interpolateLine = function (start, end){
 		var returnArray = [];
 		var max
-		['x','y','z'].forEach(function(elem, index, that){
-			if(typeof end[elem] === "undefined"){
-				end[elem] = start[elem];
+		['x','y','z'].forEach(function(axis, index, that){
+			if(typeof end[axis] === "undefined"){
+				end[axis] = start[axis];
 			} else {
-				end[elem] = that.makeNumeric(end[elem]);
+				end[axis] = makeNumeric(end[axis]);
 			}
 		}, this);
 		
 		var distance = Math.sqrt(Math.pow(end.x - start.x,2) + Math.pow(end.y-start.y,2));
 		
 		if(distance > maxDistance){
-			var intermediateSteps  = Math.floor(distance/this.maxDistance);	
+			var intermediateSteps  = Math.floor(distance/maxDistance);	
 			for(var i = 0; i<intermediateSteps; i++){
-				['x','y','z'].forEach(function(elem){
-					var newVal = start.x + ((i+1) * (end.x - start.x)/intermediateSteps);
-					returnArray[i] = returnArray[i] + elem + (newVal).toFixed(4) + " ");
+				returnArray[i] = '';
+				['x','y','z'].forEach(function (axis){
+					var newVal = start[axis] + ((i+1) * (end[axis] - start[axis])/intermediateSteps);
+					returnArray[i] = returnArray[i] + axis.toUpperCase() + newVal.toFixed(4) + " ";
 				});
 				returnArray[i] = returnArray[i] + " (added by line interpolator)";
 			};
@@ -178,14 +256,15 @@ var interPolator = (function(){
 			return false;
 		}
 	};
-	var interpolateCircle: function (start,offset,clockwise=true){
+	
+	var interpolateCircle = function (start,offset,clockwise=true){
 		var returnArray = [];
 		var origin = {	x:	start.x + offset.i,
 						y:	start.y + offset.j,
 						z:	start.z + offset.k };
 		
 		var radius = Math.sqrt( (offset.i * offset.i) + (offset.j * offset.j) );
-		if(origin.z != 0){
+		if(origin.z != start.z){
 			return false;
 		}
 		var circumference = Math.PI * 2 * radius;
@@ -197,7 +276,6 @@ var interPolator = (function(){
 			*/
 			
 			var topPosition = {x: origin.x, y: origin.y + radius};
-			var bottomPosition = 
 			var topChordLength = Math.sqrt(Math.pow(topPosition.x - start.x,2) + Math.pow(topPosition.y - start.y,2));
 			var topAngle = 2 * Math.asin(topChordLength/(2 * radius));
 			if(clockwise){
@@ -205,19 +283,21 @@ var interPolator = (function(){
 			} else {
 				var oppositeAngle = topAngle - Math.PI;
 			}
+			
 			var x = origin.x + radius * Math.sin(oppositeAngle);	
 			var y = origin.y + radius * Math.cos(oppositeAngle);
+			//console.warning('x',x,'y',y);      	
 			var temp;
 			temp = interpolateArc(start, {x:x,y:y,z:start.z}, offset, clockwise);
-			if(temp){
+			if(temp !== false){
 				returnArray = returnArray.concat(temp);
 			}
-			offset[i] = -1 * offset[i];
-			offset[j] = -1 * offset[j];
+			offset.i = -1 * offset.i;
+			offset.j = -1 * offset.j;
 			
-			temp = interpolateArc({x:x,y:y,z:start.z}, start, offset, clockwise);
-			if(temp){
-				returnArray = returnArray.concat(temp);
+			temp2 = interpolateArc({x:x,y:y,z:start.z}, start, offset, clockwise);
+			if(temp2 !== false){
+				returnArray = returnArray.concat(temp2);
 			}
 			return returnArray;
 		} else {
@@ -225,13 +305,13 @@ var interPolator = (function(){
 		}
 			
 	};
-
-	var	interpolateArc: function(start, end, offset, clockwise = true){
-		['x','y','z'].forEach(function(elem, index, that){
-			if(typeof end[elem] === "undefined"){
-				end[elem] = start[elem];
+	
+	var interpolateArc = function(start, end, offset, clockwise = true){
+		['x','y','z'].forEach(function(axis, index, that){
+			if(typeof end[axis] === "undefined"){
+				end[axis] = start[axis];
 			} else {
-				end[elem] = that.makeNumeric(end[elem]);
+				end[axis] = makeNumeric(end[axis]);
 			}
 		}, this);
 		
@@ -242,73 +322,55 @@ var interPolator = (function(){
 						z:	start.z + offset.k };
 		
 		var radius = Math.sqrt( (offset.i * offset.i) + (offset.j * offset.j) );
-		if(origin.z != 0){
-			returnArray.push(start);
-			return returnArray;
-		}
+		if(origin.z != start.z) return false;
 		var circumference = Math.PI * 2 * radius;
-		//console.log("circumference", circumference);
 		var chordLength = Math.sqrt(Math.pow(end.x-start.x,2) + Math.pow(end.y - start.y,2));
-		//console.log("chord length", chordLength);
 		var segmentAngle = 2 * (Math.asin(chordLength/(2 * radius)));
-		//console.log("segment angle", segmentAngle);
 		var arcLength = circumference * segmentAngle/(2 * Math.PI);
-		//console.log("Arc Length", arcLength);
 		if(arcLength > maxDistance){
 			var intermediateSteps = Math.floor(arcLength/maxDistance);
 			//we need the angle from the vertical
 			var topPosition = {x: origin.x, y: origin.y + radius};
-			console.log("top position", topPosition);
 			var topChordLength = Math.sqrt(Math.pow(topPosition.x - start.x,2) + Math.pow(topPosition.y - start.y,2));
-			console.log("top Chord length", topChordLength);
 			var topAngle = 2 * Math.asin(topChordLength/(2 * radius));
-			console.log("top angle", topAngle);
-			if(clockwise){
-					for(var j =0; j<intermediateSteps; j++){
-						var angle = topAngle + ((j + 1) * segmentAngle/intermediateSteps);
-						console.log("segment angle", angle);
-						var x = origin.x + radius * Math.sin(angle);	
-						var y = origin.y + radius * Math.cos(angle);	
-						if(end.z){
-							returnArray.push("G2 X" + x + " Y" + y + " Z" + end.z + " R" + radius + " (added by arc interpolator)");
-						}else{
-							returnArray.push("G2 X" + x + " Y" + y + " R" + radius + " (added by arc interpolator)");
-						}
-					}
-			} else {
-					for(var j =0; j<intermediateSteps; j++){
-						var angle = topAngle - ((j + 1) * segmentAngle/intermediateSteps);
-						console.log("segment angle", angle);
-						var x = origin.x + radius * Math.sin(angle);	
-						var y = origin.y + radius * Math.cos(angle);	
-						console.log("coords", "G3 X" + x + " Y" + y);
-						if(end.z){
-							returnArray.push("G3 X" + x + " Y" + y + " Z" + end.z + " R" + radius + " (added by arc interpolator)");
-						}else{
-							returnArray.push("G3 X" + x + " Y" + y + " R" + radius + " (added by arc interpolator)");
-						}
-					}
+			
+			if(start.x < origin.x){
+				topAngle = Math.PI + topAngle;
+			}
+			for(var j =0; j<intermediateSteps; j++){
+				if(clockwise){
+					var angle = topAngle + ((j + 1) * segmentAngle/intermediateSteps);
+				} else {
+					var angle = topAngle - ((j + 1) * segmentAngle/intermediateSteps);
+				}
+				if(angle >= 2 * Math.PI){
+					angle = angle-(2*Math.PI);
+				}
+				var x = origin.x + radius * Math.sin(angle);	
+				var y = origin.y + radius * Math.cos(angle);	
+				var z = start.z + (((end.z - start.z)/intermediateSteps) * (j+1));
+				var str = "X" + x.toFixed(4) + " Y" + y.toFixed(4) + " Z" + z.toFixed(4) + " R" + radius.toFixed(4) + " (added by arc interpolator)";
+				if(clockwise){
+					returnArray.push("G2 " + str);
+				} else {
+					returnArray.push("G3 " + str);
+				}
 			}
 			return returnArray;
 		}
 		return false;
 	};
-	
-	var makeNumeric : function(variable){
+	var makeNumeric = function(variable){
 		if(typeof variable == "number") return variable;
 		if(isNaN(variable)) return false;
 		return parseFloat(variable);
-	}
-	
+	};
 	return {
-		interpolate: function(gcode, maxDistance = 5){
-			this.input = gcode;
-			this.parseGcode();
-			this.maxDistance = maxDistance;
-		},
-		getGCode: function (){
-			return this.output;
+		interpolate: function(gcode, _maxDistance = 5){
+			input = gcode;
+			maxDistance = _maxDistance;
+			parseGcode();
+			return output;
 		}
 	};
-	
 })();
